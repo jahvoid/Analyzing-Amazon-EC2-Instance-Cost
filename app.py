@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
@@ -391,16 +392,10 @@ st.dataframe(
 
 st.subheader("Training and Testing Data")
 
-# Define features
-X = data_cleaned[
-    [
-        "Instance Memory",
-        "vCPUs"
-    ]
-]
+X = data_cleaned[["Instance Memory", "vCPUs"]]
 
-# Define target
-y = data_cleaned["On Demand"]
+# Train using the logarithm of cost to prevent unrealistic negative predictions
+y = np.log1p(data_cleaned["On Demand"])
 
 # Split into 80% training and 20% testing
 X_train, X_test, y_train, y_test = train_test_split(
@@ -458,16 +453,18 @@ st.dataframe(
 st.subheader("Model Evaluation")
 
 # Predict the costs for the testing data
-y_pred = model.predict(X_test)
+# Convert predictions back to regular dollar amounts
+y_pred = np.expm1(model.predict(X_test))
+y_test_actual = np.expm1(y_test)
 
 # Calculate performance metrics
 mae = mean_absolute_error(
-    y_test,
+    y_test_actual,
     y_pred
 )
 
 mse = mean_squared_error(
-    y_test,
+    y_test_actual,
     y_pred
 )
 
@@ -498,21 +495,25 @@ fig4, ax4 = plt.subplots(
 )
 
 ax4.scatter(
-    y_test,
+    y_test_actual,
     y_pred,
     alpha=0.7,
     color="blue"
 )
 
+minimum_cost = min(
+    y_test_actual.min(),
+    y_pred.min()
+)
+
+maximum_cost = max(
+    y_test_actual.max(),
+    y_pred.max()
+)
+
 ax4.plot(
-    [
-        min(y_test),
-        max(y_test)
-    ],
-    [
-        min(y_test),
-        max(y_test)
-    ],
+    [minimum_cost, maximum_cost],
+    [minimum_cost, maximum_cost],
     color="red",
     linestyle="--"
 )
@@ -535,28 +536,37 @@ st.pyplot(fig4)
 
 plt.close(fig4)
 
+st.subheader("Predict EC2 On-Demand Cost")
 
-
-st.subheader("Example Cost Prediction")
-
-st.write(
-    "Predicting the On-Demand cost for an EC2 instance "
-    "with 4 GiB of memory and 2 vCPUs."
+memory_input = st.number_input(
+    "Instance Memory (GiB)",
+    min_value=0.5,
+    value=4.0,
+    step=0.5
 )
 
-new_instance = pd.DataFrame(
-    {
-        "Instance Memory": [4],
-        "vCPUs": [2]
-    }
+vcpu_input = st.number_input(
+    "Number of vCPUs",
+    min_value=1,
+    value=2,
+    step=1
 )
 
-predicted_cost = model.predict(
-    new_instance
-)
+if st.button("Predict Cost"):
+    new_instance = pd.DataFrame(
+        [[memory_input, vcpu_input]],
+        columns=["Instance Memory", "vCPUs"]
+    )
 
-st.metric(
-    "Predicted On-Demand Hourly Cost",
-    f"${predicted_cost[0]:.4f}"
-)
+    # The model returns a logarithmic prediction
+    log_prediction = model.predict(new_instance)[0]
 
+    # Convert the logarithmic prediction back into dollars
+    predicted_cost = np.expm1(log_prediction)
+
+    # Additional protection against impossible negative prices
+    predicted_cost = max(0.0, predicted_cost)
+
+    st.success(
+        f"Predicted On-Demand Cost: ${predicted_cost:.4f} per hour"
+    )
